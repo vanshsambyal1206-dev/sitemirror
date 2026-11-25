@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Fixture Home — sitemirror test</title>
+  <meta name="description" content="A small deterministic site used to validate the mirror pipeline.">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="icon" href="/logo.svg">
+  <meta property="og:image" content="/logo.svg">
+  <style>
+    .inline-note { border-left: 2px solid #3ddc97; padding-left: 12px; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/"><img src="/logo.svg" alt="logo" width="28" height="28"> Fixture</a>
+    <nav>
+      <a href="/about">About</a>
+      <a href="/gallery">Gallery</a>
+      <a href="/spa">Feed</a>
+      <a href="/live">Live</a>
+      <a href="/login">Sign in</a>
+      <button id="spa-link" type="button">Open app route</button>
+    </nav>
+  </header>
+
+  <main>
+    <h1>Deterministic fixture</h1>
+    <p class="inline-note">Everything here is served by <code>_fixtures/serve.js</code> so the mirror pipeline can be asserted offline.</p>
+
+    <section class="cards">
+      <article class="card"><h2>Assets</h2><p>CSS, JS, SVG and a deliberately missing PNG.</p></article>
+      <article class="card"><h2>API</h2><p>Fetches <code>/api/data.json</code> which contains a session token.</p></article>
+      <article class="card"><h2>Auth wall</h2><p>A login page exists and must be skipped, not forced.</p></article>
+    </section>
+
+    <img class="hero" src="/missing.png" alt="deliberately missing asset">
+    <div id="api-out" class="api-out">loading…</div>
+    <div id="route-out" class="route-out"></div>
+  </main>
+
+  <footer class="site-footer"><p>fixture · no external requests</p></footer>
+  <script src="/app.js"></script>
+</body>
+</html>

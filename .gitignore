@@ -1,0 +1,14 @@
+node_modules/
+archive/
+_smoke*/
+_test-archive/
+_test-archive-https/
+_live-test/
+_spa-test/
+_tui-test/
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db

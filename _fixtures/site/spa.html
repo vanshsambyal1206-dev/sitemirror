@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Client-rendered feed — Fixture</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/">Fixture</a>
+    <nav><a href="/">Home</a><a href="/about">About</a><a href="/gallery">Gallery</a></nav>
+  </header>
+  <main>
+    <h1>Client-rendered feed</h1>
+    <p>This content only exists after a POST to <code>/api/feed</code> resolves. A static
+       mirror cannot replay the write, so the post-hydration DOM snapshot is the only
+       faithful copy of this page.</p>
+    <section id="root" class="cards">loading…</section>
+  </main>
+  <script>
+    fetch('/api/feed', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        document.getElementById('root').innerHTML = data.items
+          .map(function (i) {
+            return '<article class="card"><h2>' + i.title + '</h2><p>' + i.body + '</p></article>';
+          })
+          .join('');
+      })
+      .catch(function () {
+        document.getElementById('root').textContent = 'feed unavailable';
+      });
+  </script>
+</body>
+</html>

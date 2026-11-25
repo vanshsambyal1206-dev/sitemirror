@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Live backend — Fixture</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/">Fixture</a>
+    <nav><a href="/">Home</a><a href="/about">About</a><a href="/gallery">Gallery</a><a href="/spa">Feed</a></nav>
+  </header>
+  <main>
+    <h1>Live backend dependency</h1>
+    <p>This page opens a WebSocket and loads a WebAssembly module. Neither can be
+       replayed from a static archive — both are flagged in the report rather than faked.</p>
+    <section class="cards">
+      <article class="card"><h2>Socket</h2><p id="ws">websocket: connecting…</p></article>
+      <article class="card"><h2>WASM</h2><p id="wasm">wasm: loading…</p></article>
+      <article class="card"><h2>Offline</h2><p>Expect a yellow “live” check on this row.</p></article>
+    </section>
+  </main>
+  <script>
+    (function () {
+      var wsOut = document.getElementById('ws');
+      try {
+        var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+        var ws = new WebSocket(proto + location.host + '/ws');
+        ws.onopen = function () { wsOut.textContent = 'websocket: connected'; };
+        ws.onmessage = function (e) { wsOut.textContent = 'websocket: ' + e.data; };
+        ws.onerror = function () { wsOut.textContent = 'websocket: error'; };
+        ws.onclose = function () { if (wsOut.textContent.indexOf('tick') === -1) wsOut.textContent = 'websocket: closed'; };
+      } catch (e) {
+        wsOut.textContent = 'websocket: unsupported';
+      }
+
+      fetch('/tiny.wasm')
+        .then(function (r) { return r.arrayBuffer(); })
+        .then(function (b) {
+          document.getElementById('wasm').textContent = 'wasm: ' + b.byteLength + ' bytes loaded';
+        })
+        .catch(function () {
+          document.getElementById('wasm').textContent = 'wasm: unavailable';
+        });
+    })();
+  </script>
+</body>
+</html>
