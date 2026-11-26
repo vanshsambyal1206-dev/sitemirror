@@ -114,7 +114,18 @@ async function generateReport({ manifest, pageResults, diffResults = [], crawl =
         : 'Visual comparison produced no comparable pages.',
     );
   } else if (!meta.diffRequested) {
-    notes.push('Visual comparison was disabled (--no-diff); capture and asset ratios are reported separately.');
+    notes.push('Visual comparison was skipped (opt-in: --diff); capture and asset ratios are reported separately.');
+  }
+  if (meta.export) {
+    notes.push(
+      meta.export.unresolved
+        ? `Static export written to ${meta.export.outDir}; ${meta.export.unresolved} reference(s) still point at the live site — see EXPORT-NOTES.md.`
+        : `Static export written to ${meta.export.outDir} — every captured reference was localised.`,
+    );
+  } else if (meta.exportError) {
+    notes.push(`Static export failed: ${meta.exportError}`);
+  } else {
+    notes.push('Static export was disabled (--no-export); the replay archive is the only output.');
   }
 
   const durationMs = meta.durationMs || 0;
@@ -179,6 +190,20 @@ async function generateReport({ manifest, pageResults, diffResults = [], crawl =
       height: 'full-page height agreement (missing or extra content)',
     },
     proxy: meta.proxy || null,
+    staticExport: meta.export
+      ? {
+          path: meta.export.outDir,
+          pages: meta.export.pages,
+          assets: meta.export.assets,
+          cssRewritten: meta.export.cssRewritten,
+          rewritten: meta.export.rewritten,
+          unresolved: meta.export.unresolved,
+          bytes: meta.export.bytes,
+          durationMs: meta.export.durationMs,
+          notes: meta.export.notesPath,
+        }
+      : null,
+    staticExportError: meta.exportError || null,
     limitations: [
       'Authenticated content is out of scope; gated pages are skipped, never force-accessed.',
       'Real-time/server-generated content is snapshotted, not mirrored.',

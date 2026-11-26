@@ -12,6 +12,7 @@ class CaptureWriter {
   constructor({ archiveRoot }) {
     this.archiveRoot = archiveRoot || process.cwd();
     this.paths = new Map(); // relPath -> url
+    this.savedUrls = new Map(); // url -> saved asset (shared across pages)
     this.bytes = 0;
     this.files = 0;
   }
@@ -48,9 +49,15 @@ class CaptureWriter {
   }
 
   async saveAsset({ url, body, contentType, kind }) {
+    // Shared assets (CSS, JS, fonts, logos) are requested on every page. The
+    // bytes and the destination path are identical, so write once per URL.
+    const prior = this.savedUrls.get(url);
+    if (prior) return { ...prior, cached: true };
     const rel = this.uniquePath(assetLocalPath(url, contentType), url);
     await this.writeBuffer(rel, body);
-    return { file: rel, bytes: body.length, kind };
+    const saved = { file: rel, bytes: body.length, kind };
+    this.savedUrls.set(url, saved);
+    return saved;
   }
 
   /** Save the rendered DOM for a page. `html` is page.content(). */

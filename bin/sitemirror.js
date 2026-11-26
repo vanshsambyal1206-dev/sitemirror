@@ -15,9 +15,11 @@ const { runTui } = require('../core/tui');
 const pkg = require('../package.json');
 
 const PROFILES = {
+  // The visual diff is opt-in for every profile: it is the slowest stage and
+  // runs last, after capture and the static export are already on disk.
   recon: { maxPages: 12, delay: 500, viewport: 'desktop', diff: false, diffMaxPages: 0 },
-  standard: { maxPages: 40, delay: 700, viewport: 'default', diff: true, diffMaxPages: 10 },
-  deep: { maxPages: 120, delay: 500, viewport: 'default', diff: true, diffMaxPages: 30 },
+  standard: { maxPages: 40, delay: 700, viewport: 'default', diff: false, diffMaxPages: 10 },
+  deep: { maxPages: 120, delay: 500, viewport: 'default', diff: false, diffMaxPages: 30 },
 };
 
 const RAW_HELP = `
@@ -27,6 +29,7 @@ Usage
   sitemirror                       interactive terminal wizard
   sitemirror <url>                 capture with the live dashboard
   sitemirror <url> --plain         line-by-line output (CI, logs, pipes)
+  sitemirror export <archive>      re-export a finished archive as a static site
 
 Interactive keys
   ↑ ↓        move between options
@@ -42,8 +45,13 @@ Options
   --max-pages <n>          Maximum pages to crawl/capture (default: 40)
   --delay <ms>             Politeness delay between page loads (default: 700)
   --respect-robots <bool>  Obey robots.txt (default: true)
-  --no-diff                Skip live-vs-local visual comparison
+  --diff                   Run the visual comparison (opt-in, runs last)
+  --no-diff                Skip live-vs-local visual comparison (default)
   --diff-max-pages <n>     Compare at most N pages (default: 10)
+  --no-export              Skip the portable static export
+  --export-dir <dir>       Static export destination (default: <archive>/_static)
+  --export-layout <name>   pretty (directories) | flat (single .html files)
+  --export-link            Hardlink assets instead of copying (same volume)
   --allow-live-fallback    Serve uncaptured URLs from the live network instead of 404
   --insecure               Accept invalid TLS certificates while capturing
   --click-nav              Probe SPA navigation by clicking nav controls (default: on)
@@ -81,6 +89,9 @@ function parseArgs(argv) {
       else if (key === 'allow-live-fallback') args.allowLiveFallback = true;
       else if (key === 'click-nav') args.clickNav = true;
       else if (key === 'diff') args.diff = true;
+      else if (key === 'export') args.export = true;
+      else if (key === 'export-link') args.exportLink = true;
+      else if (key === 'link') args.link = true;
       else if (key === 'open') args.open = true;
       else if (key === 'tui' || key === 'plain' || key === 'ascii' || key === 'wizard') args[key] = true;
       else if (key.startsWith('no-')) args[camel(key.slice(3))] = false;
@@ -134,8 +145,13 @@ function buildOptions(args, config) {
     timeout: num(args.timeout ?? config.timeout, 30000),
     maxAssetBytes: num(args.maxAssetBytes ?? config.maxAssetBytes, 64 * 1024 * 1024),
     viewports,
-    diff: args.diff !== undefined ? args.diff : config.diff !== undefined ? config.diff : profile ? profile.diff : true,
+    // Opt-in, and the last stage in the pipeline.
+    diff: args.diff !== undefined ? args.diff : config.diff !== undefined ? config.diff : profile ? profile.diff : false,
     diffMaxPages: num(args.diffMaxPages ?? config.diffMaxPages ?? (profile && profile.diffMaxPages), 10),
+    export: args.export !== undefined ? args.export : config.export !== undefined ? config.export : true,
+    exportDir: args.exportDir || config.exportDir || null,
+    exportLayout: args.exportLayout || config.exportLayout || 'pretty',
+    exportLink: !!args.exportLink || !!config.exportLink,
     diffViewports: config.diffViewports ? resolveViewports(config.diffViewports) : viewports,
     maskSelectors: config.maskSelectors || [],
     maskRects: config.maskRects || [],
@@ -180,7 +196,11 @@ function printHelp() {
     ['--profile <name>', 'recon | standard | deep'],
     ['--max-pages <n>', 'page cap (default 40)'],
     ['--viewport <spec>', 'desktop,tablet,mobile or WxH'],
-    ['--no-diff', 'skip the visual comparison'],
+    ['--diff', 'run the visual comparison (opt-in, last)'],
+    ['--no-diff', 'skip the visual comparison (default)'],
+    ['--no-export', 'skip the portable static export'],
+    ['--export-dir <dir>', 'static export destination'],
+    ['--export-layout <n>', 'pretty directories | flat files'],
     ['--insecure', 'accept invalid TLS certificates'],
     ['--headed', 'visible capture browser'],
     ['--allow-live-fallback', 'pass uncaptured URLs through to live'],
@@ -293,6 +313,24 @@ async function runPlain({ target, outDir, options }) {
             status.done(`${s.assetsSaved}/${s.assetsRequested} downloaded${failedText} · ${humanBytes(s.assetsBytes)}`);
             break;
           }
+          case 'export:start':
+            status.step('Exporting...');
+            status.update('writing a portable static site');
+            break;
+          case 'export:done':
+            status.done(
+              `${payload.pages} page(s), ${payload.assets} asset(s) → ${path.relative(process.cwd(), payload.outDir) || payload.outDir}`,
+            );
+            break;
+          case 'export:skip':
+            status.note('static export skipped (--no-export)');
+            break;
+          case 'export:failed':
+            status.done(`static export failed: ${payload.error}`, false);
+            break;
+          case 'diff:skip':
+            status.note('visual diff skipped (--diff to enable)');
+            break;
           case 'diff:start':
             status.step('Visual diff...');
             status.update(`${payload.pages} page(s) × ${options.diffViewports.length} viewports`);
@@ -314,6 +352,14 @@ async function runPlain({ target, outDir, options }) {
     process.stdout.write('\n');
     process.stdout.write(`${c('accent', '✓')} Mirror ready: ${c('accent2', session.serverUrl)}\n`);
     process.stdout.write(`${c('accent', '✓')} Report:       ${c('accent2', session.reportUrl)}\n`);
+    if (session.exportResult) {
+      process.stdout.write(`${c('accent', '✓')} Static site:  ${c('accent2', session.exportResult.outDir)}\n`);
+      if (session.exportResult.unresolved) {
+        process.stdout.write(
+          `${c('warn', '!')} ${session.exportResult.unresolved} reference(s) still point at the live site — see EXPORT-NOTES.md\n`,
+        );
+      }
+    }
     if (session.proxy) {
       process.stdout.write(
         `${c('faint', '·')} Exact replay: open ${c('accent2', target)} in a browser proxied through ${c('accent2', `127.0.0.1:${session.proxy.port}`)} (PAC: ${session.serverUrl}/__proxy.pac)\n`,
@@ -359,6 +405,45 @@ async function runPlain({ target, outDir, options }) {
   }
 }
 
+/* ----------------------------------------------------------- export command */
+
+async function runExportCommand(args) {
+  const rawArchive = args._[1];
+  if (!rawArchive) {
+    console.error('Usage: sitemirror export <archive-dir> [--out <dir>] [--layout pretty|flat] [--link]');
+    process.exit(1);
+  }
+  const archiveRoot = path.resolve(String(rawArchive));
+  const outDir = args.out && args.out !== true ? path.resolve(String(args.out)) : null;
+  const layout = String(args.exportLayout || args.layout || 'pretty');
+  const link = !!args.exportLink || !!args.link;
+
+  const { exportStatic } = require('../core/static-export');
+  const status = new Status();
+  status.step('Exporting...');
+  try {
+    const result = await exportStatic({
+      archiveRoot,
+      outDir,
+      layout,
+      link,
+      log: (m) => status.update(m),
+    });
+    status.done(
+      `${result.pages} page(s), ${result.assets} asset(s), ${result.rewritten} reference(s) rewritten · ${humanBytes(result.bytes)}`,
+    );
+    process.stdout.write(`\n${c('accent', '✓')} Static export: ${c('accent2', result.outDir)}\n`);
+    if (result.unresolved) {
+      process.stdout.write(`${c('warn', '!')} ${result.unresolved} reference(s) still point at the live site — see EXPORT-NOTES.md\n`);
+    }
+    process.stdout.write(`${c('faint', '·')} Serve it with any static server: python -m http.server, nginx, Netlify, …\n\n`);
+  } catch (err) {
+    status.done(`export failed: ${err.message}`, false);
+    if (process.env.SITEMIRROR_DEBUG) console.error(err);
+    process.exit(1);
+  }
+}
+
 /* ------------------------------------------------------------------- main */
 
 async function main() {
@@ -372,6 +457,11 @@ async function main() {
 
   if (args.help) {
     printHelp();
+    return;
+  }
+
+  if (args._[0] === 'export') {
+    await runExportCommand(args);
     return;
   }
 

@@ -214,13 +214,13 @@ function profileItems() {
     {
       id: 'standard',
       name: 'STANDARD',
-      desc: '40 pages · 3 viewports · full audit',
+      desc: '40 pages · 3 viewports · static export',
       eta: '~4 min',
     },
     {
       id: 'deep',
       name: 'DEEP',
-      desc: '120 pages · 3 viewports · full audit',
+      desc: '120 pages · 3 viewports · static export',
       eta: '~15 min',
     },
     {
@@ -420,6 +420,7 @@ const PHASES = [
   { id: 'crawl', label: 'CRAWL' },
   { id: 'capture', label: 'CAPTURE' },
   { id: 'prepare', label: 'PREPARE' },
+  { id: 'export', label: 'EXPORT' },
   { id: 'diff', label: 'DIFF' },
   { id: 'report', label: 'REPORT' },
   { id: 'serve', label: 'SERVE' },
@@ -515,7 +516,10 @@ function renderDashboard(state, ctx) {
         `${paint('muted', `${state.captureDone}/${state.captureTotal} pages`)}` +
         `${state.assetsSaved && width >= 74 ? paint('faint', `  ${G.sep}  ${state.assetsSaved} assets`) : ''}`;
     } else {
-      detail = paint(p.status === 'active' ? 'muted' : p.status === 'done' ? 'muted' : 'faint', T.ellipsisEnd(detail, width - 13));
+      detail = paint(
+        p.status === 'active' ? 'muted' : p.status === 'done' ? 'muted' : 'faint',
+        T.ellipsisEnd(detail, width - 14),
+      );
     }
 
     out.push(`${MARGIN} ${glyph}  ${labelStyled}${detail}`);
@@ -618,6 +622,18 @@ function renderResults(data, ctx) {
       (assetsFailed ? paint('faint', `  ${G.sep}  ${assetsFailed} unavailable`) : ''),
   );
   out.push(`${MARGIN}${paint('faint', 'ARCHIVE'.padEnd(11))}${paint('muted', T.ellipsisStart(data.archiveRoot, boxWidth - 14))}`);
+  if (data.exportDir && data.exportResult) {
+    out.push(`${MARGIN}${paint('faint', 'STATIC'.padEnd(11))}${paint('muted', T.ellipsisStart(data.exportDir, boxWidth - 14))}`);
+    if (data.exportResult.unresolved) {
+      out.push(
+        `${MARGIN}${paint('warn', '!')} ${paint('faint', T.ellipsisEnd(`${data.exportResult.unresolved} reference(s) still point at the live site — see EXPORT-NOTES.md`, width - 5))}`,
+      );
+    }
+  } else if (data.exportError) {
+    out.push(
+      `${MARGIN}${paint('warn', 'STATIC'.padEnd(11))}${paint('warn', T.ellipsisEnd('export failed — see the report', width - 14))}`,
+    );
+  }
   out.push('');
 
   const liveLines = [

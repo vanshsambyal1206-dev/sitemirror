@@ -84,6 +84,9 @@ function stop(child) {
 }
 
 async function main() {
+  console.log('\n── stage 1/6 · static export rewriter unit tests\n');
+  await runNode('_fixtures/unit-export.js', []);
+
   const port = await freePort();
   const origin = `http://127.0.0.1:${port}`;
   const outDir = path.join(ROOT, '_test-archive');
@@ -91,7 +94,7 @@ async function main() {
 
   if (fs.existsSync(archiveDir)) fs.rmSync(archiveDir, { recursive: true, force: true });
 
-  console.log(`\n── stage 1/4 · fixture origin on ${origin}\n`);
+  console.log(`\n── stage 2/6 · fixture origin on ${origin}\n`);
   const fixture = spawn(process.execPath, [path.join(__dirname, 'serve.js'), String(port)], {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -102,15 +105,18 @@ async function main() {
   try {
     await waitForPort(port);
 
-    console.log(`\n── stage 2/4 · capture pipeline → ${path.relative(ROOT, archiveDir)}\n`);
+    console.log(`\n── stage 3/6 · capture pipeline → ${path.relative(ROOT, archiveDir)}\n`);
     await runNode('_fixtures/e2e.js', [origin, outDir]);
 
     console.log('\n── origin shut down · archive must stand alone\n');
     await stop(fixture);
     await new Promise((r) => setTimeout(r, 200));
 
-    console.log('\n── stage 3/4 · offline replay invariants\n');
+    console.log('\n── stage 4/6 · offline replay invariants\n');
     await runNode('_fixtures/verify.js', [archiveDir, origin]);
+
+    console.log('\n── stage 5/6 · static export invariants (plain static server, no proxy)\n');
+    await runNode('_fixtures/verify-export.js', [archiveDir]);
   } finally {
     await stop(fixture);
   }
@@ -137,7 +143,7 @@ async function httpsStage() {
 
   if (fs.existsSync(archiveDir)) fs.rmSync(archiveDir, { recursive: true, force: true });
 
-  console.log(`\n── stage 4/4 · HTTPS replay · ${origin}\n`);
+  console.log(`\n── stage 6/6 · HTTPS replay · ${origin}\n`);
   const fixture = spawn(process.execPath, [path.join(__dirname, 'serve.js'), String(port), '--tls'], {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],

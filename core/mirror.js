@@ -10,6 +10,7 @@ const { Manifest } = require('./manifest');
 const { MirrorProxy } = require('./proxy');
 const { DiffEngine } = require('./diff-engine');
 const { PreviewServer } = require('./server');
+const { exportStatic, finalizeExport } = require('./static-export');
 const { generateReport } = require('../report/generator');
 const authWall = require('../checks/auth-wall');
 const dynamicApi = require('../checks/dynamic-api');
@@ -31,8 +32,15 @@ async function runMirror({ rootUrl, outDir, options = {}, emit = () => {}, open 
     clickBudget: 10,
     timeout: 30000,
     maxAssetBytes: 64 * 1024 * 1024,
-    diff: true,
+    // The visual diff is expensive and runs last, after capture and export.
+    // It is opt-in: --diff / options.diff === true.
+    diff: false,
     diffMaxPages: 10,
+    // A portable static tree is written next to the replay archive. It costs
+    // seconds and no network, so it is on by default.
+    export: true,
+    exportLayout: 'pretty',
+    exportLink: false,
     ...options,
   };
   const viewports = options.viewports && options.viewports.length ? options.viewports : resolveViewports('default');
@@ -42,6 +50,7 @@ async function runMirror({ rootUrl, outDir, options = {}, emit = () => {}, open 
   // Windows forbids : < > " / \ | ? * in directory names — ports and IPv6 need sanitising.
   const domainDir = domain.replace(/[<>:"/\\|?*\s]/g, '_');
   const archiveRoot = path.join(outDir, domainDir);
+  const exportDir = options.exportDir ? path.resolve(options.exportDir) : path.join(archiveRoot, '_static');
   await ensureDir(archiveRoot);
 
   const writer = new CaptureWriter({ archiveRoot });
@@ -117,10 +126,33 @@ async function runMirror({ rootUrl, outDir, options = {}, emit = () => {}, open 
     await proxy.start();
     emit('proxy:done', { port: proxy.port });
 
+    // --------------------------------------------------------------- export
+    // Runs before the visual diff: the diff is the final, optional check.
+    let exportResult = null;
+    let exportError = null;
+    if (options.export !== false) {
+      emit('export:start', { outDir: exportDir });
+      try {
+        exportResult = await exportStatic({
+          archiveRoot,
+          outDir: exportDir,
+          layout: options.exportLayout,
+          link: !!options.exportLink,
+          log: (m) => emit('log', m),
+        });
+        emit('export:done', exportResult);
+      } catch (err) {
+        exportError = describeError(err);
+        emit('export:failed', { error: exportError });
+      }
+    } else {
+      emit('export:skip', {});
+    }
+
     // ----------------------------------------------------------------- diff
     let diffResults = [];
     let localBrowser = null;
-    if (options.diff !== false) {
+    if (options.diff) {
       emit('diff:start', { pages: Math.min(options.diffMaxPages, pageResults.filter((p) => p.status === 'captured').length) });
       // Browser-level proxy: context-level proxies are not applied to
       // WebSockets, so an offline replay could still open live sockets.
@@ -157,6 +189,7 @@ async function runMirror({ rootUrl, outDir, options = {}, emit = () => {}, open 
 
       // Persist the winning document strategy per page so both the proxy and
       // the preview server replay each page the way it actually renders best.
+      const changedPages = [];
       for (const d of diffResults) {
         const page = manifest.pages.find((p) => p.url === d.url);
         if (!page) continue;
@@ -164,12 +197,71 @@ async function runMirror({ rootUrl, outDir, options = {}, emit = () => {}, open 
           .map((v) => v && v.documentMode)
           .filter(Boolean);
         if (!modes.length) continue;
+        const beforeMode = page.documentMode;
         const rawWins = modes.filter((m) => m === 'raw').length;
         page.documentMode = rawWins >= modes.length / 2 ? 'raw' : 'snapshot';
+        if (beforeMode !== page.documentMode) changedPages.push(page.url);
         const pr = pageResults.find((p) => p.url === d.url);
         if (pr) pr.documentMode = page.documentMode;
       }
       await fsp.writeFile(path.join(archiveRoot, 'manifest.json'), JSON.stringify(manifest.toJSON(), null, 2), 'utf8');
+
+      // The diff may have flipped a page from raw to snapshot (or back). Re-export
+      // only those pages; assets are already in place and are not touched.
+      if (exportResult && changedPages.length) {
+        emit('export:redo', { pages: changedPages.length });
+        try {
+          const redo = await exportStatic({
+            archiveRoot,
+            outDir: exportDir,
+            layout: options.exportLayout,
+            link: !!options.exportLink,
+            pages: changedPages,
+            overwrite: false,
+            log: (m) => emit('log', m),
+          });
+
+          // A partial export only reports the pages it rewrote. Merge it into
+          // the full pass so the session and the report describe the whole site.
+          const seen = new Set(
+            (exportResult.unresolvedRefs || []).map((u) => `${u.page}\u0000${u.file}\u0000${u.ref}`),
+          );
+          const refs = [...(exportResult.unresolvedRefs || [])];
+          for (const u of redo.unresolvedRefs || []) {
+            const key = `${u.page}\u0000${u.file}\u0000${u.ref}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            refs.push(u);
+          }
+
+          const merged = {
+            ...exportResult,
+            pages: redo.pages,
+            assets: redo.assets,
+            rewritten: exportResult.rewritten + redo.rewritten,
+            cssRewritten: exportResult.cssRewritten + redo.cssRewritten,
+            durationMs: exportResult.durationMs + redo.durationMs,
+            generatedAt: new Date().toISOString(),
+            unresolvedRefs: refs,
+            unresolved: refs.length,
+          };
+          const written = await finalizeExport({
+            outDir: exportDir,
+            report: { ...merged, unresolved: refs },
+            recountBytes: true,
+          });
+          merged.bytes = written.bytes;
+          merged.notesPath = written.notesPath;
+          merged.reportPath = written.reportPath;
+          exportResult = merged;
+          emit('export:done', exportResult);
+        } catch (err) {
+          exportError = describeError(err);
+          emit('export:failed', { error: exportError });
+        }
+      }
+    } else {
+      emit('diff:skip', {});
     }
 
     // --------------------------------------------------------------- report
@@ -181,7 +273,9 @@ async function runMirror({ rootUrl, outDir, options = {}, emit = () => {}, open 
       meta: {
         durationMs: Date.now() - startedAt,
         viewportCount: viewports.length,
-        diffRequested: options.diff !== false,
+        diffRequested: !!options.diff,
+        export: exportResult,
+        exportError,
         proxy: { port: proxy.port, pac: proxy.pacUrl() },
       },
     });
@@ -216,6 +310,9 @@ async function runMirror({ rootUrl, outDir, options = {}, emit = () => {}, open 
 
     return {
       archiveRoot,
+      exportDir,
+      exportResult,
+      exportError,
       manifest,
       report,
       diffResults,

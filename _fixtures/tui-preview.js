@@ -107,7 +107,8 @@ function dashboardState(finished) {
       crawl: { status: 'done', detail: '16 pages discovered' },
       capture: { status: 'active', detail: '' },
       prepare: { status: 'pending', detail: 'manifest + replay proxy' },
-      diff: { status: 'pending', detail: 'live vs local render' },
+      export: { status: 'pending', detail: 'portable static site' },
+      diff: { status: 'pending', detail: 'live vs local render (optional)' },
       report: { status: 'pending', detail: 'self-contained html' },
       serve: { status: 'pending', detail: 'local preview server' },
     },
@@ -115,6 +116,7 @@ function dashboardState(finished) {
   if (finished) {
     state.phases.capture = { status: 'done', detail: '16 pages · 341 assets · 24.8 MB' };
     state.phases.prepare = { status: 'done', detail: 'replay proxy on 127.0.0.1:63892' };
+    state.phases.export = { status: 'done', detail: '16 page(s) · 341 asset(s) · 2 live ref(s)' };
     state.phases.diff = { status: 'done', detail: '96% visual match across 10 pages' };
     state.phases.report = { status: 'done', detail: 'report.html written' };
     state.phases.serve = { status: 'done', detail: 'http://127.0.0.1:5173' };
@@ -131,6 +133,8 @@ function dashboardState(finished) {
 const RESULTS = {
   durationMs: 214000,
   archiveRoot: 'C:\\Users\\vansh\\Desktop\\cite cloner\\archive\\example.com',
+  exportDir: 'C:\\Users\\vansh\\Desktop\\cite cloner\\archive\\example.com\\_static',
+  exportResult: { pages: 16, assets: 341, unresolved: 2, bytes: 26000000 },
   serverUrl: 'http://127.0.0.1:5173',
   reportUrl: 'http://127.0.0.1:5173/__report/',
   proxyPort: 63892,

@@ -221,9 +221,10 @@ function waitAnyKey(keys) {
 /* ------------------------------------------------------------------ wizard */
 
 const PROFILE_MAP = {
+  // The visual diff is opt-in and always the last stage.
   recon: { maxPages: 12, delay: 500, viewports: 'desktop', diff: false, diffMaxPages: 0 },
-  standard: { maxPages: 40, delay: 700, viewports: 'default', diff: true, diffMaxPages: 10 },
-  deep: { maxPages: 120, delay: 500, viewports: 'default', diff: true, diffMaxPages: 30 },
+  standard: { maxPages: 40, delay: 700, viewports: 'default', diff: false, diffMaxPages: 10 },
+  deep: { maxPages: 120, delay: 500, viewports: 'default', diff: false, diffMaxPages: 30 },
 };
 
 const VIEWPORT_ENUM = [
@@ -237,7 +238,8 @@ function defaultOptionValues() {
     maxPages: 40,
     delay: 700,
     viewports: 'desktop,tablet,mobile',
-    diff: true,
+    diff: false,
+    export: true,
     clickNav: true,
     respectRobots: true,
     open: true,
@@ -252,7 +254,8 @@ function buildOptionRows(values) {
     { key: 'maxPages', label: 'Max pages', type: 'number', value: values.maxPages, min: 1, max: 500, step: 10 },
     { key: 'delay', label: 'Politeness delay', type: 'number', value: values.delay, min: 0, max: 5000, step: 100, unit: 'ms' },
     { key: 'viewports', label: 'Viewports', type: 'enum', value: values.viewports, options: VIEWPORT_ENUM },
-    { key: 'diff', label: 'Visual diff', type: 'bool', value: values.diff },
+    { key: 'export', label: 'Static export', type: 'bool', value: values.export },
+    { key: 'diff', label: 'Visual diff (last)', type: 'bool', value: values.diff },
     { key: 'clickNav', label: 'SPA click-nav', type: 'bool', value: values.clickNav },
     { key: 'respectRobots', label: 'Respect robots.txt', type: 'bool', value: values.respectRobots },
     { key: 'open', label: 'Open when finished', type: 'bool', value: values.open },
@@ -311,6 +314,7 @@ function buildPreviewConfig(state) {
       delay: v.delay,
       viewports: v.viewports,
       diff: v.diff,
+      export: v.export,
       clickNav: v.clickNav,
       respectRobots: v.respectRobots,
       open: v.open,
@@ -327,6 +331,7 @@ function buildPreviewConfig(state) {
       delay: p.delay,
       viewports: p.viewports,
       diff: p.diff,
+      export: v.export,
       clickNav: true,
       respectRobots: true,
       open: v.open,
@@ -347,7 +352,8 @@ function buildPreviewConfig(state) {
   const eta = { recon: '~1 min', standard: '~4 min', deep: '~15 min', custom: 'depends on options' };
 
   const audit = [
-    `diff ${opts.diff ? 'on' : 'off'}`,
+    `export ${opts.export ? 'on' : 'off'}`,
+    `diff ${opts.diff ? 'on (last)' : 'off'}`,
     `click-nav ${opts.clickNav ? 'on' : 'off'}`,
     `robots ${opts.respectRobots ? 'on' : 'off'}`,
   ].join(` ${T.glyphs.sep} `);
@@ -370,6 +376,8 @@ function buildPreviewConfig(state) {
       maxAssetBytes: 64 * 1024 * 1024,
       viewports,
       diff: opts.diff,
+      export: opts.export,
+      exportLayout: 'pretty',
       diffMaxPages: opts.diffMaxPages,
       diffViewports: viewports,
       maskSelectors: [],
@@ -598,6 +606,7 @@ const PHASE_LABEL = {
   crawl: 'CRAWLING',
   capture: 'CAPTURING',
   prepare: 'PREPARING',
+  export: 'EXPORTING',
   diff: 'COMPARING',
   report: 'REPORTING',
   serve: 'SERVING',
@@ -607,7 +616,8 @@ const DEFAULT_DETAIL = {
   crawl: 'robots.txt + link discovery',
   capture: 'pages and their assets',
   prepare: 'manifest + replay proxy',
-  diff: 'live vs local render',
+  export: 'portable static site',
+  diff: 'live vs local render (optional)',
   report: 'self-contained html',
   serve: 'local preview server',
 };
@@ -709,6 +719,30 @@ function applyEvent(state, event, payload) {
       break;
     case 'proxy:done':
       setPhase(state, 'prepare', 'done', `replay proxy on 127.0.0.1:${payload.port}`);
+      break;
+    case 'export:start':
+      setPhase(state, 'export', 'active', 'rewriting references');
+      break;
+    case 'export:done':
+      setPhase(
+        state,
+        'export',
+        'done',
+        `${payload.pages} page(s) · ${payload.assets} asset(s)${payload.unresolved ? ` · ${payload.unresolved} live ref(s)` : ''}`,
+      );
+      break;
+    case 'export:redo':
+      setPhase(state, 'export', 'active', `re-exporting ${payload.pages} page(s) after the diff`);
+      break;
+    case 'export:skip':
+      setPhase(state, 'export', 'done', 'skipped (--no-export)');
+      break;
+    case 'export:failed':
+      setPhase(state, 'export', 'failed', String(payload.error || 'export failed'));
+      break;
+    case 'diff:skip':
+      setPhase(state, 'diff', 'done', 'skipped (--diff to enable)');
+      setPhase(state, 'report', 'active');
       break;
     case 'diff:start':
       setPhase(state, 'diff', 'active', `${payload.pages} page${payload.pages === 1 ? '' : 's'}`);
@@ -833,6 +867,9 @@ async function runResults({ screen, keys, version, session }) {
   const data = {
     durationMs: session.durationMs,
     archiveRoot: session.archiveRoot,
+    exportDir: session.exportDir,
+    exportResult: session.exportResult,
+    exportError: session.exportError,
     serverUrl: session.serverUrl,
     reportUrl: session.reportUrl,
     proxyPort: session.proxy ? session.proxy.port : null,

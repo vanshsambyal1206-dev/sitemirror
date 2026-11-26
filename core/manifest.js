@@ -22,6 +22,11 @@ class Manifest {
     this.archiveRoot = null;
     this.spaMode = false;
     this.index = { byUrl: new Map(), byPathKey: new Map(), byPathname: new Map(), pagesByUrl: new Map() };
+    // Identity maps kept alongside the lookup indexes so every add is O(1)
+    // instead of a linear scan plus a full index rebuild.
+    this.pageSet = new Set();
+    this.pageByUrl = new Map();
+    this.assetByUrl = new Map();
   }
 
   setArchiveRoot(dir) {
@@ -31,27 +36,58 @@ class Manifest {
   addPage(entry) {
     const url = normalizeUrl(entry.url);
     if (!url) return null;
-    const existing = this.pages.find((p) => p.url === url);
+    const existing = this.pageByUrl.get(url);
     if (existing) return existing;
     const page = { url, ...entry, url };
     page.url = url;
     this.pages.push(page);
-    this.buildIndexes();
+    this.pageByUrl.set(url, page);
+    this.pageSet.add(page);
+    this.indexPage(page);
     return page;
   }
 
   addAsset(entry) {
     const url = normalizeUrl(entry.url);
     if (!url) return null;
-    const existing = this.assets.find((a) => a.url === url);
+    const existing = this.assetByUrl.get(url);
     if (existing) {
-      if (!existing.ok && entry.ok) Object.assign(existing, entry, { url });
+      if (!existing.ok && entry.ok) {
+        Object.assign(existing, entry, { url });
+        this.indexAsset(existing);
+      }
       return existing;
     }
     const asset = { ...entry, url };
     this.assets.push(asset);
-    if (asset.ok) this.buildIndexes();
+    this.assetByUrl.set(url, asset);
+    if (asset.ok) this.indexAsset(asset);
     return asset;
+  }
+
+  /** Add one captured page to the lookup indexes (pages always win over assets). */
+  indexPage(page) {
+    if (!page.file || page.status !== 'captured') return;
+    this.index.pagesByUrl.set(page.url, page);
+    this.index.byUrl.set(page.url, page);
+    const pk = pathKey(page.url);
+    if (pk) this.index.byPathKey.set(pk, page);
+  }
+
+  /** Add one successful asset to the lookup indexes without rebuilding them. */
+  indexAsset(asset) {
+    if (!this.index.byUrl.has(asset.url)) this.index.byUrl.set(asset.url, asset);
+    const pk = pathKey(asset.url);
+    if (pk && !this.index.byPathKey.has(pk)) this.index.byPathKey.set(pk, asset);
+    try {
+      const pn = new URL(asset.url).pathname;
+      const hit = this.index.byPathname.get(pn);
+      if (!hit) this.index.byPathname.set(pn, asset);
+      else if (Array.isArray(hit)) hit.push(asset);
+      else this.index.byPathname.set(pn, [hit, asset]);
+    } catch {
+      /* opaque URL — no pathname index */
+    }
   }
 
   addWs(entry) {
@@ -91,36 +127,23 @@ class Manifest {
   }
 
   buildIndexes() {
-    const byUrl = new Map();
-    const byPathKey = new Map();
-    const byPathname = new Map();
-    const pagesByUrl = new Map();
+    this.index = { byUrl: new Map(), byPathKey: new Map(), byPathname: new Map(), pagesByUrl: new Map() };
+    this.pageSet = new Set();
+    this.pageByUrl = new Map();
+    this.assetByUrl = new Map();
 
     for (const page of this.pages) {
+      this.pageSet.add(page);
+      this.pageByUrl.set(page.url, page);
       // Only pages that actually produced a file are replayable. Skipped
       // (auth-walled) and failed pages stay in the manifest as evidence but are
       // never served as if they had been captured.
-      if (!page.file || page.status !== 'captured') continue;
-      pagesByUrl.set(page.url, page);
-      byUrl.set(page.url, page);
-      const pk = pathKey(page.url);
-      if (pk && !byPathKey.has(pk)) byPathKey.set(pk, page);
+      this.indexPage(page);
     }
     for (const asset of this.assets) {
-      if (!asset.ok) continue;
-      if (!byUrl.has(asset.url)) byUrl.set(asset.url, asset);
-      const pk = pathKey(asset.url);
-      if (pk && !byPathKey.has(pk)) byPathKey.set(pk, asset);
-      try {
-        const pn = new URL(asset.url).pathname;
-        if (!byPathname.has(pn)) byPathname.set(pn, asset);
-        else if (Array.isArray(byPathname.get(pn))) byPathname.get(pn).push(asset);
-        else byPathname.set(pn, [byPathname.get(pn), asset]);
-      } catch {
-        /* ignore */
-      }
+      this.assetByUrl.set(asset.url, asset);
+      if (asset.ok) this.indexAsset(asset);
     }
-    this.index = { byUrl, byPathKey, byPathname, pagesByUrl };
   }
 
   /**
@@ -138,7 +161,7 @@ class Manifest {
     const pk = pathKey(normalized);
     if (pk) {
       hit = this.index.byPathKey.get(pk);
-      if (hit) return { type: this.pages.includes(hit) ? 'page' : 'asset', entry: hit, matched: 'path' };
+      if (hit) return { type: this.pageSet.has(hit) ? 'page' : 'asset', entry: hit, matched: 'path' };
     }
     if (!pathnameFallback) return null;
     try {

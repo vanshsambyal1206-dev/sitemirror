@@ -22,7 +22,13 @@ async function main() {
     options: {
       maxPages,
       delay: 100,
+      // The diff is opt-in and runs last; this harness needs it because the
+      // offline stage asserts the winning document strategy was persisted.
+      diff: true,
       diffMaxPages,
+      // The static export is on by default; pass it explicitly so the fixture
+      // keeps testing it even if that default ever changes.
+      export: true,
       clickNav: true,
       respectRobots: true,
       insecure: process.env.INSECURE === '1',
@@ -40,6 +46,15 @@ async function main() {
   console.log(JSON.stringify({ stats, visual: session.report.summary.visual, overall: session.report.summary.overall }, null, 2));
   console.log('pages:', session.pageResults.map((p) => `${p.status} ${p.url}`).join('\n       '));
   console.log('archive:', path.relative(process.cwd(), session.archiveRoot));
+  if (session.exportResult) {
+    console.log(
+      'static:',
+      path.relative(process.cwd(), session.exportResult.outDir),
+      `(${session.exportResult.pages} pages, ${session.exportResult.assets} assets, ${session.exportResult.unresolved} unresolved)`,
+    );
+  } else if (session.exportError) {
+    console.log('static export failed:', session.exportError);
+  }
 
   await session.close();
 }
